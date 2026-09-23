@@ -12,40 +12,45 @@ downstream of it in this fleet. Owns **NetworkOrder** and
 Study project — not a production system, not affiliated with Amazon or any
 company (see README.md banner).
 
-## CURRENT STATE: design stage, no implementation
+## CURRENT STATE: Phase 3 skeleton, stub-only
 
-This repo contains **one ADR, the fleet harness, and nothing else**. There
-is no Go service code, no `cmd/`, no `apis/`, no chart, no `web/`. Read
+This repo now holds the Phase 3 skeleton: the `NetworkOrder` aggregate,
+the ACL translation boundary, the two use cases (`ReceiveNetworkDemand`,
+`SweepAcknowledgementDeadlines`), in-memory and stub adapters, and the
+`netfulfil` composition root. There is still no `apis/`, no chart, no
+`web/`, no Postgres adapter and no live network call anywhere. Read
 `docs/adr/0001-network-fulfillment-bounded-context.md` before writing any
-code here — the boundary is still Proposed and is a companion to
-`order-management` ADR 0020. Neither is meaningful without the other.
+code here — the boundary is **Accepted (2026-09-23)** and is a companion
+to `order-management` ADR 0020. Neither is meaningful without the other.
 
-**`.github/workflows/ci.yml` is deliberately still `ci.yml.template`.**
-GitHub only executes files literally named `*.yml`/`*.yaml` under
-`.github/workflows/`, so CI does not run here yet. This mirrors the
-`warehouse-harness-template` repo's own decision for the same reason: a
-repo with no Dockerfile, no `apis/openapi.yaml`, no charts and no `web/`
-fails almost every job, and that red is meaningless noise rather than a
-useful signal. **Rename it to `ci.yml` in the same PR that lands the first
-real service code** (rollout Phase 3 in the ADR) — not before, not later.
+**CI is ACTIVE** (`.github/workflows/ci.yml`), with five jobs: `lint`,
+`test`, `mutation-fast`, `vuln`, `arch-test`. These are exactly the jobs
+whose surfaces exist in this repo today. The template's other jobs —
+`bdd`, `integration`, `api-lint`, `docs-api-drift`, `helm-lint`, `web`,
+`trivy-scan`, `docker-publish`, `release`, `drift` — were **dropped, not
+disabled**, because there is no `features/`, `apis/`, `charts/`, `web/`,
+`migrations/` or Dockerfile yet. Add each job back in the PR that creates
+its surface; a job that fails for want of a directory is noise, not
+signal.
 
-**Branch protection on `develop` is live but INCOMPLETE by the same
-reasoning.** It matches `process-path-management`'s shape —
-`enforce_admins: true`, `required_conversation_resolution: true`,
-`dismiss_stale_reviews: true`, no force-push, no deletion, 0 required
-reviewers — with **`required_status_checks` deliberately left null**,
-because requiring contexts that can never report (CI is not active) would
-make every PR permanently unmergeable. In the same PR that activates
-`ci.yml`, add the sibling's eight contexts with `strict: true`:
+**Branch protection on `develop` must now require the five active
+contexts** with `strict: true`:
 
 ```
-lint  test  bdd  integration  mutation-fast  vuln  api-lint  arch-test
+lint  test  mutation-fast  vuln  arch-test
 ```
 
-Placeholders remaining by design: `.gremlins.yaml`'s
-`{{MEASURED_EFFICACY_MINUS_1}}` / `{{MEASURED_MUTANT_COVERAGE_MINUS_1}}`.
-These MUST be measured against real code via `make mutation-full` and set
-strictly below the measured numbers — never copied from a sibling repo.
+The earlier deferral (protection live with `required_status_checks: null`,
+because requiring contexts that could never report would have made every
+PR permanently unmergeable) is now resolved: the contexts report, so they
+are required. Add the remaining four of `process-path-management`'s eight
+(`bdd`, `integration`, `api-lint`) as each surface lands.
+
+`.gremlins.yaml` thresholds are MEASURED, not copied: `efficacy: 99`,
+`mutant-coverage: 92`, set strictly below a real `gremlins unleash
+./internal/domain` run of this repo's own code (100.00% efficacy, 93.33%
+mutant coverage, 14 killed / 0 lived / 1 not covered). Re-measure and
+re-set them when the domain grows; never copy a sibling's numbers.
 
 `.claude/rules/*.md` are the template's structural skeletons with
 `<!-- fill in -->` markers. Fill them in for real once the domain exists;
