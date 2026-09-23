@@ -1,0 +1,122 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "network-fulfillment.fullname" . }}
+  labels:
+    {{- include "network-fulfillment.labels" . | nindent 4 }}
+spec:
+  {{- if not .Values.autoscaling.enabled }}
+  replicas: {{ .Values.replicaCount }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "network-fulfillment.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      labels:
+        {{- include "network-fulfillment.selectorLabels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "network-fulfillment.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: {{ .Chart.Name }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            # A single containerPort: this context serves only inbound
+            # HTTP (/healthz plus the network-demand intake routes) off
+            # one http.Server on PORT -- see cmd/netfulfil/main.go.
+            - name: http
+              containerPort: {{ .Values.service.targetPort }}
+              protocol: TCP
+          # envFrom mounts every ConfigMap key at once; the explicit env
+          # entries below for the same names take precedence (standard
+          # Kubernetes merge behaviour), so they are belt-and-braces for
+          # the values that must never silently arrive empty.
+          envFrom:
+            - configMapRef:
+                name: {{ include "network-fulfillment.fullname" . }}
+          env:
+            - name: PORT
+              value: {{ .Values.config.port | quote }}
+            - name: NETWORK_MODE
+              value: {{ .Values.config.networkMode | quote }}
+            - name: ORDER_MANAGEMENT_URL
+              value: {{ .Values.config.orderManagementUrl | quote }}
+            - name: SWEEP_INTERVAL
+              value: {{ .Values.config.sweepInterval | quote }}
+            {{- if ne .Values.config.networkMode "stub" }}
+            {{- if not (or .Values.credentials.existingSecret .Values.credentials.clientId) }}
+            {{- fail (printf "config.networkMode is %q but no credentials are set: provide credentials.existingSecret or credentials.clientId/clientSecret/refreshToken. Rendering these secretKeyRefs against a Secret that is never created would leave the pod in CreateContainerConfigError instead of the binary's own fail-closed error." .Values.config.networkMode) }}
+            {{- end }}
+            # Only mounted outside stub mode. This is what keeps the kind
+            # cluster and e2e-tests credential-free: the default install
+            # needs no Secret to exist at all, and asking for sandbox or
+            # live is an explicit, visible act.
+            - name: NETWORK_CLIENT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "network-fulfillment.credentialsSecretName" . }}
+                  key: NETWORK_CLIENT_ID
+            - name: NETWORK_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "network-fulfillment.credentialsSecretName" . }}
+                  key: NETWORK_CLIENT_SECRET
+            - name: NETWORK_REFRESH_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "network-fulfillment.credentialsSecretName" . }}
+                  key: NETWORK_REFRESH_TOKEN
+            {{- end }}
+            {{- if .Values.otel.enabled }}
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: {{ .Values.otel.endpoint | quote }}
+            - name: OTEL_SERVICE_NAME
+              value: {{ .Values.otel.serviceName | quote }}
+            - name: SERVICE_VERSION
+              value: {{ .Values.image.tag | default .Chart.AppVersion | quote }}
+            - name: ENVIRONMENT
+              value: {{ .Values.environment | quote }}
+            {{- end }}
+            {{- range .Values.extraEnv }}
+            - {{ toYaml . | nindent 14 | trim }}
+            {{- end }}
+          {{- with .Values.livenessProbe }}
+          livenessProbe:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.readinessProbe }}
+          readinessProbe:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

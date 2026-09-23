@@ -1,0 +1,32 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "network-fulfillment.fullname" . }}
+  labels:
+    {{- include "network-fulfillment.labels" . | nindent 4 }}
+data:
+  # This context's entire configuration surface is four variables (see
+  # cmd/netfulfil/main.go). It reads no database and no Kafka.
+  PORT: {{ .Values.config.port | quote }}
+
+  # NETWORK_MODE decides which external-network adapter is wired:
+  #   stub    - no external calls, no credentials (the default)
+  #   sandbox - the network's sandbox endpoint, sandbox credentials
+  #   live    - the real network, real credentials
+  # The binary FAILS CLOSED: an unrecognised value falls back to stub, and
+  # live/sandbox REFUSE TO BOOT without credentials rather than silently
+  # degrading. That refusal is the point -- a context that quietly stopped
+  # talking to the network would look healthy while acknowledging nothing.
+  NETWORK_MODE: {{ .Values.config.networkMode | quote }}
+
+  # order-management's REST base URL. This is the one upstream this
+  # context calls, and it is a genuine dependency rather than optional
+  # plumbing: without it no held order can be raised and no feasibility
+  # verdict can be asked for (ADR 0001 section 7).
+  ORDER_MANAGEMENT_URL: {{ .Values.config.orderManagementUrl | quote }}
+
+  # How often the acknowledgement-deadline sweep runs. Every unanswered
+  # order past its window holds real inventory reservations, so this is
+  # the knob deciding how long the floor can be blocked by demand the
+  # network never confirmed.
+  SWEEP_INTERVAL: {{ .Values.config.sweepInterval | quote }}

@@ -103,6 +103,34 @@ jobs:
   # Packaging validation runs for every pull request, including the normal
   # GitFlow path to develop; main-only gating left ordinary changes untested.
 
+  # ============================================================
+  # CLASSIFICATION: CHART LINT + CHART BEHAVIOUR TESTS
+  # Unlike the fleet's main-only helm-lint convention, this runs on EVERY
+  # PR. The chart test below asserts a fail-closed credential invariant,
+  # and a credential-wiring regression that only surfaced on a
+  # main-targeting PR would already have been merged to develop.
+  # ============================================================
+  helm-lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
+        with:
+          version: v3.16.4
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: "3.x"
+          check-latest: true
+      - name: helm lint
+        run: helm lint charts/network-fulfillment
+      - name: Chart credential-wiring tests
+        run: |
+          pip install pyyaml
+          python3 charts/network-fulfillment/tests/test_credential_wiring.py
+
   arch-test:
     runs-on: ubuntu-latest
     timeout-minutes: 10
