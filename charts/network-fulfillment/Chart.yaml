@@ -1,0 +1,13 @@
+apiVersion: v2
+name: network-fulfillment
+description: Network Fulfillment — the Anti-Corruption Layer that sells this warehouse's fulfillment capability to an external retail network (Amazon Vendor Direct Fulfillment), translating network demand into order-management orders and never letting the network's vocabulary leak inward
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+home: https://github.com/claudioed/network-fulfillment
+keywords:
+  - ddd
+  - hexagonal-architecture
+  - anti-corruption-layer
+  - warehouse-execution-system
+  - golang

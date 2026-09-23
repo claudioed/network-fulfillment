@@ -1,0 +1,152 @@
+# Default values for network-fulfillment.
+
+replicaCount: 1
+
+image:
+  repository: ghcr.io/claudioed/network-fulfillment
+  pullPolicy: IfNotPresent
+  tag: ""
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  create: true
+  annotations: {}
+  name: ""
+
+podAnnotations: {}
+podLabels: {}
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  fsGroup: 1000
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: false
+  capabilities:
+    drop: ["ALL"]
+
+service:
+  type: ClusterIP
+  port: 80
+  targetPort: 8080
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts:
+    - host: network-fulfillment.local
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+
+# Additive, disabled-by-default alternative to the ingress block above.
+# Mirrors the shape verified live in warehouse-infra's Gateway API pilot.
+# Flip gatewayApi.enabled: true and set real parentRefs to switch this
+# service from Ingress to HTTPRoute; leaving it false is a strict no-op.
+gatewayApi:
+  enabled: false
+  parentRefs:
+    - name: ""
+      namespace: ""
+      sectionName: "http"
+  hosts:
+    - path: /
+      pathType: PathPrefix
+  stripPath: true
+
+resources:
+  limits:
+    cpu: 500m
+    memory: 256Mi
+  requests:
+    cpu: 100m
+    memory: 128Mi
+
+autoscaling:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 5
+  targetCPUUtilizationPercentage: 80
+
+# This context holds NO database and NO Kafka connection. Its whole
+# configuration surface is these four variables (cmd/netfulfil/main.go).
+config:
+  port: "8080"
+
+  # stub | sandbox | live.
+  #
+  # stub is the default ON PURPOSE. It makes no external calls and needs
+  # no credentials, so a default `helm install`, the kind cluster, and
+  # the e2e suite all work with nothing configured -- and none of them
+  # can accidentally acknowledge a real retailer's order.
+  #
+  # sandbox and live REQUIRE credentials below and the pod refuses to
+  # start without them. That refusal is deliberate: silently degrading to
+  # stub would leave a pod that looks healthy while quietly acknowledging
+  # nothing the network sent.
+  networkMode: "stub"
+
+  # order-management's in-cluster REST base URL. The one upstream this
+  # context calls; the default matches the fleet's service naming.
+  orderManagementUrl: "http://order-management.warehouse.svc.cluster.local"
+
+  # How often the acknowledgement-deadline sweep runs. Every unanswered
+  # order past its 24h window is sitting on real inventory reservations,
+  # so this decides how long the floor stays blocked by demand the
+  # network never confirmed.
+  sweepInterval: "5m"
+
+# External-network credentials. Used ONLY when config.networkMode is
+# "sandbox" or "live" -- in stub mode nothing here is read and no Secret
+# is created, which is what keeps local installs credential-free.
+#
+# Set existingSecret to point at a Secret you manage yourself (its keys
+# must be named NETWORK_CLIENT_ID / NETWORK_CLIENT_SECRET /
+# NETWORK_REFRESH_TOKEN). Prefer that over the inline values below for
+# anything that is not a throwaway sandbox: inline values land in the
+# release's stored manifest in plain text.
+credentials:
+  existingSecret: ""
+  clientId: ""
+  clientSecret: ""
+  refreshToken: ""
+
+# Deployment environment, exported as the deployment.environment.name
+# resource attribute on every span and metric.
+environment: "local"
+
+# OpenTelemetry. Traces and metrics are PUSHED over OTLP/gRPC to a
+# Collector; the service never exposes a Prometheus scrape endpoint of
+# its own. An unreachable endpoint is not fatal -- the exporters dial
+# lazily, so the pod still starts and serves, it just drops telemetry.
+otel:
+  enabled: true
+  endpoint: "otel-collector.observability.svc.cluster.local:4317"
+  serviceName: "network-fulfillment"
+
+extraEnv: []
+
+livenessProbe:
+  httpGet:
+    path: /healthz
+    port: http
+  initialDelaySeconds: 5
+  periodSeconds: 10
+
+readinessProbe:
+  httpGet:
+    path: /healthz
+    port: http
+  initialDelaySeconds: 3
+  periodSeconds: 5
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
