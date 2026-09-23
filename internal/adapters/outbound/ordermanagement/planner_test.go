@@ -45,10 +45,11 @@ func TestRaiseHeldOrder_SendsAHeldShipCompleteOrder(t *testing.T) {
 	}}
 	srv := rec.server(t)
 
+	deadline := now().Add(48 * time.Hour)
 	p := ordermanagement.NewPlanner(srv.URL, srv.Client())
 	res, err := p.RaiseHeldOrder(context.Background(), contract.HeldOrderRequest{
 		SiteId:         "site-1",
-		RequiredShipBy: now().Add(48 * time.Hour),
+		RequiredShipBy: deadline,
 		Lines:          map[shared.SKU]int{"SKU-1": 2},
 	})
 	if err != nil {
@@ -73,18 +74,32 @@ func TestRaiseHeldOrder_SendsAHeldShipCompleteOrder(t *testing.T) {
 	if body["allowPartialShipment"] != false {
 		t.Fatalf("allowPartialShipment = %v, want false — network demand is fill-or-kill", body["allowPartialShipment"])
 	}
+	// The deadline must be sent AND carry the caller's actual value.
+	// Asserting merely non-nil is not enough: a zero time.Time still
+	// serialises to a string, so an adapter that dropped the field
+	// entirely would pass a nil-check and silently fall back to
+	// order-management's earliest-window promise, never reaching
+	// FeasibleBy at all.
+	if got, want := body["requiredShipBy"], deadline.Format(time.RFC3339); got != want {
+		t.Fatalf("requiredShipBy = %v, want %q — the caller's deadline must reach order-management verbatim", got, want)
+	}
 }
 
-func TestRaiseHeldOrder_FeasibilityComparesThePromiseToTheDeadline(t *testing.T) {
+func TestRaiseHeldOrder_FeasibilityIsOrderManagementsVerdict(t *testing.T) {
+	// A promise means order-management found a window at or before the
+	// deadline; no promise means it could not. We do NOT re-compare
+	// instants here -- the 2026-09-26 case below is the discriminating
+	// one: a date AFTER our deadline still reads feasible, because
+	// order-management only promises what it can meet and a second
+	// opinion computed here could only ever disagree with the authority.
 	cases := []struct {
 		name         string
 		promiseDate  string
 		wantFeasible bool
 	}{
-		{"promise before the deadline", `"2026-09-24T08:00:00Z"`, true},
-		{"promise exactly at the deadline", `"2026-09-25T08:00:00Z"`, true},
-		{"promise after the deadline", `"2026-09-26T08:00:00Z"`, false},
-		{"no promise at all", `null`, false},
+		{"a promise is a commitment", `"2026-09-24T08:00:00Z"`, true},
+		{"we do not re-judge the date", `"2026-09-26T08:00:00Z"`, true},
+		{"no promise is a refusal", `null`, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
