@@ -10,7 +10,7 @@ description: "ADR 0001 — why the integration with an external retail fulfillme
 
 ## Status
 
-Proposed. Companion to `order-management` ADR 0020 (network-originated
+Accepted (2026-09-23). Companion to `order-management` ADR 0020 (network-originated
 demand: `releaseOnAllocation`, `PromisePolicy.FeasibleBy`, and the
 `Network` promise basis). Neither is meaningful without the other: this
 context cannot honour the network's 24-hour fill-or-kill acknowledgement
