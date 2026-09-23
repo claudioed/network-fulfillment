@@ -46,6 +46,10 @@ type receiveOrderRequest struct {
 	// partial shipment (its ADR 0020 §4) — so this is not a default we
 	// are choosing, it is an invariant we must satisfy.
 	AllowPartialShipment bool `json:"allowPartialShipment"`
+	// RequiredShipBy hands the network's deadline to order-management so
+	// IT decides feasibility via PromisePolicy.FeasibleBy. This is what
+	// ADR 0001 §7 means by "asked, never recomputed here".
+	RequiredShipBy time.Time `json:"requiredShipBy"`
 }
 
 type orderResponse struct {
@@ -56,24 +60,19 @@ type orderResponse struct {
 	} `json:"lines"`
 }
 
-// RaiseHeldOrder creates the held order and derives feasibility.
+// RaiseHeldOrder creates the held order and asks for a feasibility
+// verdict, by sending the network's deadline as requiredShipBy.
 //
-// HONEST LIMITATION, and the reason this is a comparison rather than a
-// call: order-management's PromisePolicy.FeasibleBy — added for exactly
-// this purpose in its ADR 0020 phase 2 — is NOT reachable over REST.
-// POST /orders accepts no deadline, so it computes the earliest promise
-// it can make and returns that; this adapter then compares two instants.
+// order-management answers with PromisePolicy.FeasibleBy: a promise
+// means the deadline is makeable, and NO promise means it is not. We do
+// not compare instants here and we do not reimplement the rule — the
+// promise math lives in exactly one place in this fleet and it is not
+// this context (ADR 0001 §7).
 //
-// The two agree whenever the earliest promise is the only thing that
-// matters, which is every case today. They diverge on the rule
-// FeasibleBy actually encodes: pick the LATEST window that still meets
-// the deadline, leaving the floor maximum slack. Until order-management
-// accepts requiredShipBy on intake, we get the earliest-window answer
-// and give up that slack.
-//
-// This is a known gap, not an oversight: closing it means adding a
-// deadline to order-management's intake contract, which is its own ADR
-// and its own PR.
+// An absent promiseDate is therefore a VERDICT, not a missing field.
+// That is the one subtlety worth remembering when reading this: for an
+// ordinary order a null promise means "not computed yet", but for an
+// order carrying a deadline it means "we cannot meet it".
 func (p *Planner) RaiseHeldOrder(ctx context.Context, req contract.HeldOrderRequest) (contract.HeldOrderResult, error) {
 	lines := make([]orderLineRequest, 0, len(req.Lines))
 	for sku, qty := range req.Lines {
@@ -84,6 +83,7 @@ func (p *Planner) RaiseHeldOrder(ctx context.Context, req contract.HeldOrderRequ
 		Lines:                lines,
 		ReleaseOnAllocation:  false,
 		AllowPartialShipment: false,
+		RequiredShipBy:       req.RequiredShipBy,
 	}
 
 	var out orderResponse
@@ -91,10 +91,10 @@ func (p *Planner) RaiseHeldOrder(ctx context.Context, req contract.HeldOrderRequ
 		return contract.HeldOrderResult{}, err
 	}
 
-	// No promise at all means order-management could not place this
-	// order in any window it knows about — not feasible, and explicitly
-	// NOT an error: "we cannot make your deadline" is a legitimate
-	// answer that must reach the network as a rejection.
+	// No promise means order-management could not find a window at or
+	// before the deadline — not feasible, and explicitly NOT an error:
+	// "we cannot make your date" is a legitimate answer that must reach
+	// the network as a rejection.
 	if out.PromiseDate == nil {
 		return contract.HeldOrderResult{
 			LocalOrderId: shared.LocalOrderId(out.ID),
@@ -102,9 +102,14 @@ func (p *Planner) RaiseHeldOrder(ctx context.Context, req contract.HeldOrderRequ
 		}, nil
 	}
 
+	// A promise came back, so order-management has committed to a
+	// departure at or before the deadline. We take its word rather than
+	// re-checking: a second opinion computed here could only ever
+	// disagree with the authority, and disagreeing with the authority is
+	// how two services end up promising different things.
 	return contract.HeldOrderResult{
 		LocalOrderId:   shared.LocalOrderId(out.ID),
-		Feasible:       !out.PromiseDate.After(req.RequiredShipBy),
+		Feasible:       true,
 		PromisedCutoff: *out.PromiseDate,
 	}, nil
 }
