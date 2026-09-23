@@ -29,6 +29,19 @@ fails almost every job, and that red is meaningless noise rather than a
 useful signal. **Rename it to `ci.yml` in the same PR that lands the first
 real service code** (rollout Phase 3 in the ADR) — not before, not later.
 
+**Branch protection on `develop` is live but INCOMPLETE by the same
+reasoning.** It matches `process-path-management`'s shape —
+`enforce_admins: true`, `required_conversation_resolution: true`,
+`dismiss_stale_reviews: true`, no force-push, no deletion, 0 required
+reviewers — with **`required_status_checks` deliberately left null**,
+because requiring contexts that can never report (CI is not active) would
+make every PR permanently unmergeable. In the same PR that activates
+`ci.yml`, add the sibling's eight contexts with `strict: true`:
+
+```
+lint  test  bdd  integration  mutation-fast  vuln  api-lint  arch-test
+```
+
 Placeholders remaining by design: `.gremlins.yaml`'s
 `{{MEASURED_EFFICACY_MINUS_1}}` / `{{MEASURED_MUTANT_COVERAGE_MINUS_1}}`.
 These MUST be measured against real code via `make mutation-full` and set
