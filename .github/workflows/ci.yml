@@ -74,6 +74,35 @@ jobs:
           name: coverage
           path: coverage.out
 
+  # ============================================================
+  # CLASSIFICATION: CORRECTNESS (INTEGRATION, REAL POSTGRES)
+  # ============================================================
+  # The Postgres adapter against a real Postgres 16, started by
+  # testcontainers INSIDE the test (never a DATABASE_URL service container
+  # with a skip gate — a skip-gated test reports success while asserting
+  # nothing, and this job would skip silently). Docker is available on
+  # ubuntu-latest runners, so no service block is needed here.
+  integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: go.mod
+
+      - name: Build and vet (integration tag)
+        # Integration files are invisible to the default build, so a
+        # signature change breaks only this job. Checked explicitly before
+        # the run so the failure names the cause.
+        run: |
+          set -euo pipefail
+          go build -tags=integration ./...
+          go vet -tags=integration ./...
+
+      - name: Integration tests
+        run: go test -tags=integration ./... -race -count=1
+
   mutation-fast:
     runs-on: ubuntu-latest
     timeout-minutes: 15

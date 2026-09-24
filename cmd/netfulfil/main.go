@@ -9,6 +9,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -19,6 +20,8 @@ import (
 	"github.com/claudioed/network-fulfillment/internal/adapters/outbound/memory"
 	"github.com/claudioed/network-fulfillment/internal/adapters/outbound/network"
 	"github.com/claudioed/network-fulfillment/internal/adapters/outbound/ordermanagement"
+	"github.com/claudioed/network-fulfillment/internal/adapters/outbound/postgres"
+	"github.com/claudioed/network-fulfillment/internal/application/ports"
 	"github.com/claudioed/network-fulfillment/internal/application/usecases"
 )
 
@@ -47,7 +50,17 @@ func main() {
 	}
 	logger.Info("network gateway wired", "mode", mode)
 
-	orders := memory.NewNetworkOrderRepo()
+	orders, closeOrders, err := wireOrders(context.Background(), logger)
+	if err != nil {
+		// Same reasoning as the gateway above: a deployment that asked
+		// for a database and silently got an in-memory map would look
+		// healthy while forgetting every acknowledgement deadline it owes
+		// the moment it restarts.
+		logger.Error("cannot wire order repository", "err", err)
+		os.Exit(1)
+	}
+	defer closeOrders()
+
 	translation := memory.NewProductTranslation()
 
 	omBase := os.Getenv("ORDER_MANAGEMENT_URL")
@@ -125,6 +138,55 @@ func runSweep(ctx context.Context, sweep *usecases.SweepAcknowledgementDeadlines
 			}
 		}
 	}
+}
+
+// wireOrders chooses the NetworkOrderRepo implementation.
+//
+// With no DATABASE_URL the service runs on the in-memory repo, which is
+// what keeps a local run and the unit suite free of infrastructure (ADR
+// 0001 §4). With one set, it MUST reach Postgres: returning an error
+// rather than falling back is the whole point, because the fallback is
+// silent and its cost is the acknowledgement deadlines this context owes
+// the network.
+//
+// Migrations run here, at startup, matching every sibling service in this
+// fleet — the alternative is a separate job that can be forgotten, and a
+// schema that lags the binary is how a context starts answering wrongly
+// rather than not at all.
+func wireOrders(ctx context.Context, logger *slog.Logger) (ports.NetworkOrderRepo, func(), error) {
+	databaseURL := os.Getenv("DATABASE_URL")
+	if databaseURL == "" {
+		logger.Info("order repository wired", "backend", "memory")
+		return memory.NewNetworkOrderRepo(), func() {}, nil
+	}
+
+	if err := postgres.RunMigrations(databaseURL, migrationsPath()); err != nil {
+		return nil, nil, fmt.Errorf("run migrations: %w", err)
+	}
+	pool, err := postgres.NewPool(ctx, databaseURL)
+	if err != nil {
+		return nil, nil, fmt.Errorf("open pool: %w", err)
+	}
+	// ParseConfig/NewWithConfig do not themselves establish a connection,
+	// so without this the first real failure would surface inside a
+	// request rather than at boot — turning a misconfigured deployment
+	// into an intermittent 500 instead of a refusal to start.
+	if err := pool.Ping(ctx); err != nil {
+		pool.Close()
+		return nil, nil, fmt.Errorf("ping: %w", err)
+	}
+
+	logger.Info("order repository wired", "backend", "postgres")
+	return postgres.NewNetworkOrderRepo(pool), pool.Close, nil
+}
+
+// migrationsPath is where the migrations live in the container image (see
+// Dockerfile), overridable for a local run from the repo root.
+func migrationsPath() string {
+	if p := os.Getenv("MIGRATIONS_PATH"); p != "" {
+		return p
+	}
+	return "/app/migrations"
 }
 
 func sweepInterval() time.Duration {

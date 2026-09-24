@@ -48,3 +48,11 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- include "network-fulfillment.fullname" . }}-credentials
 {{- end }}
 {{- end }}
+
+{{- define "network-fulfillment.databaseSecretName" -}}
+{{- if .Values.database.existingSecret }}
+{{- .Values.database.existingSecret }}
+{{- else }}
+{{- include "network-fulfillment.fullname" . }}-database
+{{- end }}
+{{- end }}

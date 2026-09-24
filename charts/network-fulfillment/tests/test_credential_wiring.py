@@ -14,6 +14,11 @@ The stub assertions matter just as much: stub mode is what lets the kind
 cluster and the e2e suite run with no credentials anywhere, and a chart
 that started demanding a Secret by default would break both.
 
+The same invariant now also covers the DATABASE_URL Secret, for the same
+reason: a chart that references a database Secret it never creates fails
+the identical opaque way, and the default (no database at all, in-memory
+repo) must keep needing no Secret whatsoever.
+
 Run: python3 charts/network-fulfillment/tests/test_credential_wiring.py
 """
 
@@ -151,12 +156,77 @@ def check_non_stub_without_credentials_fails_closed() -> None:
         print(f"PASS: {mode} without credentials fails at template time, with a reason")
 
 
+def check_default_has_no_database() -> None:
+    """The zero-config default: in-memory repo, so no DATABASE_URL anywhere.
+
+    This is what keeps `helm install` with no values working against a
+    cluster that has no Postgres for this context.
+    """
+    docs = render([])
+    assert "DATABASE_URL" not in env_names(docs), (
+        "the default render set DATABASE_URL; the zero-config install must "
+        "run on the in-memory repository"
+    )
+    assert not any(n.endswith("-database") for n in secret_names(docs)), (
+        f"the default render created a database Secret: {sorted(secret_names(docs))}"
+    )
+    print("PASS: default render has no database wiring at all")
+
+
+def check_database_url_creates_the_secret_it_references() -> None:
+    """The same dangling-reference invariant, for the database Secret."""
+    docs = render(["--set", "database.url=postgres://u:p@pg:5432/nf?sslmode=disable"])
+
+    assert "DATABASE_URL" in env_names(docs), (
+        "database.url was set but the container has no DATABASE_URL env var, "
+        "so the binary would silently run on its in-memory repo and forget "
+        "every acknowledgement deadline on restart"
+    )
+    dangling = secret_refs(docs) - secret_names(docs)
+    assert not dangling, (
+        f"database.url references Secret(s) {sorted(dangling)} that this chart "
+        f"never creates (it creates {sorted(secret_names(docs))})"
+    )
+    print("PASS: database.url -- every referenced Secret is created")
+
+
+def check_database_existing_secret_is_trusted() -> None:
+    """existingSecret is the user's promise that the Secret exists."""
+    docs = render([
+        "--set", "database.existingSecret=my-own-pg",
+        "--set", "database.existingSecretKey=url",
+    ])
+
+    assert not any(n.endswith("-database") for n in secret_names(docs)), (
+        "database.existingSecret was set but the chart created its own "
+        "database Secret anyway, which would overwrite externally-managed "
+        "credentials"
+    )
+    assert "my-own-pg" in secret_refs(docs), (
+        f"expected the container to reference my-own-pg, got {secret_refs(docs)}"
+    )
+    # The key is configurable and a mismatch is invisible until the pod
+    # cannot start, so assert the override actually reaches the ref.
+    keys = {
+        e["valueFrom"]["secretKeyRef"]["key"]
+        for d in docs if d.get("kind") == "Deployment"
+        for c in d["spec"]["template"]["spec"]["containers"]
+        for e in c.get("env", [])
+        if e.get("name") == "DATABASE_URL"
+    }
+    assert keys == {"url"}, f"expected the overridden key 'url', got {keys}"
+    print("PASS: database.existingSecret is referenced, not overwritten, with its key")
+
+
 def main() -> int:
     check_stub_default_needs_no_secret()
     check_every_ref_is_created()
     check_existing_secret_is_trusted()
     check_non_stub_without_credentials_fails_closed()
-    print("\nAll credential-wiring assertions passed.")
+    check_default_has_no_database()
+    check_database_url_creates_the_secret_it_references()
+    check_database_existing_secret_is_trusted()
+    print("\nAll credential- and database-wiring assertions passed.")
     return 0
 
 

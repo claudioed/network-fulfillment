@@ -118,6 +118,25 @@ credentials:
   clientSecret: ""
   refreshToken: ""
 
+# Persistence. With BOTH left empty the binary runs on its in-memory
+# repository: that is the zero-configuration local run (ADR 0001 section 4),
+# and it is deliberately the default so a `helm install` with no values
+# needs no database to exist.
+#
+# It is NOT an acceptable production posture. An in-memory repo forgets
+# every acknowledgement deadline this context owes the network on restart,
+# and pods in this fleet restart once at rollout by design — so a real
+# deployment sets database.url (or existingSecret) and the binary then
+# REFUSES to boot if Postgres is unreachable, rather than silently falling
+# back to the map.
+#
+# Prefer existingSecret outside a throwaway cluster: an inline url lands in
+# the release's stored manifest in plain text.
+database:
+  url: ""
+  existingSecret: ""
+  existingSecretKey: "DATABASE_URL"
+
 # Deployment environment, exported as the deployment.environment.name
 # resource attribute on every span and metric.
 environment: "local"

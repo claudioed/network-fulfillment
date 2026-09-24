@@ -36,10 +36,11 @@ RUN apk upgrade --no-cache && \
     addgroup -g 1000 -S app && adduser -u 1000 -S app -G app
 WORKDIR /app
 COPY --from=build --chown=app:app /out/netfulfil ./netfulfil
+# Migrations ship IN the image and run at startup, matching every
+# database-backed sibling. They land at /app/migrations, which is
+# cmd/netfulfil's default MIGRATIONS_PATH.
+COPY --from=build --chown=app:app /src/migrations ./migrations
 USER 1000
 
-# No migrations/ COPY: this context persists nothing yet (in-memory
-# repositories only). When a Postgres adapter lands, add the migrations
-# directory here the way the database-backed siblings do.
 EXPOSE 8080
 ENTRYPOINT ["./netfulfil"]

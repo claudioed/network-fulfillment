@@ -12,39 +12,50 @@ downstream of it in this fleet. Owns **NetworkOrder** and
 Study project — not a production system, not affiliated with Amazon or any
 company (see README.md banner).
 
-## CURRENT STATE: Phase 3 skeleton, stub-only
+## CURRENT STATE: persisted, deployed, stub-only
 
-This repo now holds the Phase 3 skeleton: the `NetworkOrder` aggregate,
-the ACL translation boundary, the two use cases (`ReceiveNetworkDemand`,
-`SweepAcknowledgementDeadlines`), in-memory and stub adapters, and the
-`netfulfil` composition root. There is still no `apis/`, no chart, no
-`web/`, no Postgres adapter and no live network call anywhere. Read
+This repo holds the `NetworkOrder` aggregate, the ACL translation
+boundary, the two use cases (`ReceiveNetworkDemand`,
+`SweepAcknowledgementDeadlines`), in-memory AND Postgres repositories, the
+stub network gateway, a Dockerfile, a Helm chart, and the `netfulfil`
+composition root. It is deployed to the kind cluster.
+
+Persistence is opt-in by `DATABASE_URL`: unset means the in-memory repo
+(zero-config local run, hermetic unit suite), set means Postgres or a
+REFUSAL to boot — never a silent fallback, because the fallback costs the
+acknowledgement deadlines this context owes the network.
+
+There is still no `apis/` (no REST surface beyond `/healthz`), no `web/`,
+and no live network call anywhere. `ReceiveNetworkDemand` is reachable
+only from the gateway poll loop, which is `stub` in the cluster. Read
 `docs/adr/0001-network-fulfillment-bounded-context.md` before writing any
 code here — the boundary is **Accepted (2026-09-23)** and is a companion
 to `order-management` ADR 0020. Neither is meaningful without the other.
 
-**CI is ACTIVE** (`.github/workflows/ci.yml`), with five jobs: `lint`,
-`test`, `mutation-fast`, `vuln`, `arch-test`. These are exactly the jobs
-whose surfaces exist in this repo today. The template's other jobs —
-`bdd`, `integration`, `api-lint`, `docs-api-drift`, `helm-lint`, `web`,
+**CI is ACTIVE** (`.github/workflows/ci.yml`), with seven jobs: `lint`,
+`test`, `integration`, `mutation-fast`, `vuln`, `arch-test`, `helm-lint`.
+These are exactly the jobs whose surfaces exist in this repo today.
+`integration` runs the Postgres adapter against a real Postgres started by
+testcontainers INSIDE the test — never a `DATABASE_URL` service container
+with a skip gate, which would report success while asserting nothing. The
+template's remaining jobs — `bdd`, `api-lint`, `docs-api-drift`, `web`,
 `trivy-scan`, `docker-publish`, `release`, `drift` — were **dropped, not
 disabled**, because there is no `features/`, `apis/`, `charts/`, `web/`,
 `migrations/` or Dockerfile yet. Add each job back in the PR that creates
 its surface; a job that fails for want of a directory is noise, not
 signal.
 
-**Branch protection on `develop` must now require the five active
+**Branch protection on `develop` must now require the seven active
 contexts** with `strict: true`:
 
 ```
-lint  test  mutation-fast  vuln  arch-test
+lint  test  integration  mutation-fast  vuln  arch-test  helm-lint
 ```
 
 The earlier deferral (protection live with `required_status_checks: null`,
 because requiring contexts that could never report would have made every
 PR permanently unmergeable) is now resolved: the contexts report, so they
-are required. Add the remaining four of `process-path-management`'s eight
-(`bdd`, `integration`, `api-lint`) as each surface lands.
+are required. Add the remaining ones (`bdd`, `api-lint`) as each surface lands.
 
 `.gremlins.yaml` thresholds are MEASURED, not copied: `efficacy: 99`,
 `mutant-coverage: 92`, set strictly below a real `gremlins unleash
