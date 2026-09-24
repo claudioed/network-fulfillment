@@ -61,6 +61,17 @@ spec:
               value: {{ .Values.config.orderManagementUrl | quote }}
             - name: SWEEP_INTERVAL
               value: {{ .Values.config.sweepInterval | quote }}
+            {{- if or .Values.database.url .Values.database.existingSecret }}
+            # Set only when a database is configured. With no DATABASE_URL
+            # the binary runs on its in-memory repo, which is what keeps a
+            # zero-config local run and the unit suite infrastructure-free
+            # (ADR 0001 section 4).
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "network-fulfillment.databaseSecretName" . }}
+                  key: {{ .Values.database.existingSecretKey }}
+            {{- end }}
             {{- if ne .Values.config.networkMode "stub" }}
             {{- if not (or .Values.credentials.existingSecret .Values.credentials.clientId) }}
             {{- fail (printf "config.networkMode is %q but no credentials are set: provide credentials.existingSecret or credentials.clientId/clientSecret/refreshToken. Rendering these secretKeyRefs against a Secret that is never created would leave the pod in CreateContainerConfigError instead of the binary's own fail-closed error." .Values.config.networkMode) }}
