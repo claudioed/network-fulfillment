@@ -1,0 +1,356 @@
+openapi: 3.0.3
+info:
+  title: Network Fulfillment API
+  version: "1.0.0"
+  description: >
+    The Anti-Corruption Layer between this platform and an external retail
+    fulfillment network (Amazon's Selling Partner API, Vendor Direct
+    Fulfillment). It owns **NetworkOrder**: demand that arrived from
+    outside carrying a deadline we did not choose, and the answer we owe
+    the network by a deadline the network set.
+
+
+    **This surface is READ-ONLY, and that is a design decision rather than
+    an omission.** Demand enters this context by POLLING the network and
+    by nothing else: the network offers us no push, so an HTTP intake
+    endpoint would be a second, fictional inbound path with no counterpart
+    in production. The only thing such an endpoint could honestly be used
+    for is injecting test demand, and the stub gateway's file-seeded mode
+    (`NETWORK_SEED_FILE`) already does that without pretending to be a
+    protocol.
+
+
+    So what is exposed here is OBSERVATION, answering the two questions an
+    operator actually has during an incident: *what did we tell the
+    network about purchase order X*, and *is the inbound leg alive*. The
+    second matters because the poller's failure mode is silence — a poller
+    that stops fetching produces no orders, no errors and a perfectly
+    healthy `/healthz`, while the 24-hour acknowledgement clock keeps
+    running against wall time. A poller outage is an SLA breach, not a
+    delayed batch.
+
+
+    **Customer PII stops in this context.** Ship-to name, address and
+    phone live here and nowhere else in this platform, and no response in
+    this document carries them. The network's own *references* (its
+    purchase-order number, its line references, its product identifiers)
+    ARE exposed, because the questions above are unanswerable without
+    them — those identify the order, not the person.
+
+
+    Feasibility is never computed here. Whether a deadline can be met is
+    asked of order-management's promise policy, which owns that arithmetic
+    for the whole platform; this context asks, records the verdict, and
+    answers the network accordingly.
+  contact:
+    name: Network Fulfillment (Supporting Bounded Context, ACL to an external retail network)
+  license:
+    name: MIT
+    url: https://opensource.org/licenses/MIT
+
+servers:
+  - url: http://localhost:8000/api/network-fulfillment
+    description: Local kind cluster, through the Kong gateway
+  - url: http://localhost:8080
+    description: Direct, for a local run
+
+tags:
+  - name: network-orders
+    description: >
+      Demand received from the external network, and the answer we gave
+      it.
+  - name: operations
+    description: >
+      Liveness, and whether the inbound polling leg is actually working.
+
+paths:
+  /healthz:
+    get:
+      operationId: healthz
+      tags: [operations]
+      summary: Liveness probe
+      description: >
+        Liveness only. It deliberately does NOT consult the database or the
+        poller: a probe that fails when a dependency is slow turns one
+        degraded dependency into a restart loop, and this service's whole
+        job is to keep a 24-hour clock running.
+      responses:
+        "200":
+          description: The process is alive.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties:
+                  status:
+                    type: string
+                    example: ok
+
+  /inbound-status:
+    get:
+      operationId: getInboundStatus
+      tags: [operations]
+      summary: Is the inbound polling leg alive?
+      description: >
+        Counters for the poller plus the size of the unanswered working
+        set. This exists because a stalled poller is SILENT: no orders, no
+        errors, a healthy liveness probe, and an acknowledgement window
+        closing regardless.
+
+
+        `polls` climbing with `since` advancing means the leg is working
+        and the network simply has nothing for us. `polls` climbing while
+        `since` stays put means every pass is failing. `since` absent
+        after real uptime means no pass has ever succeeded.
+
+
+        `overdue` above zero is the fact worth alerting on: demand whose
+        24-hour window has already closed unanswered.
+      responses:
+        "200":
+          description: Current inbound state.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InboundStatus"
+        "500":
+          $ref: "#/components/responses/Problem"
+
+  /network-orders:
+    get:
+      operationId: listUnansweredNetworkOrders
+      tags: [network-orders]
+      summary: List orders still awaiting an answer
+      description: >
+        The unanswered working set — orders in `NEW`, the ones the
+        acknowledgement sweep acts on.
+
+
+        Only this list is exposed, deliberately. It is the only listing
+        whose size is an operational signal; a general "all orders"
+        endpoint would need paging and would answer no question anybody
+        has while something is wrong.
+      responses:
+        "200":
+          description: Unanswered orders, soonest deadline first.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [networkOrders]
+                properties:
+                  networkOrders:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/NetworkOrder"
+        "500":
+          $ref: "#/components/responses/Problem"
+
+  /network-orders/{networkRef}:
+    get:
+      operationId: getNetworkOrder
+      tags: [network-orders]
+      summary: Get one network order
+      description: >
+        What we recorded for one unit of network demand, and what we told
+        the network about it.
+
+
+        Lines carry BOTH vocabularies: the network's product identifier
+        and the SKU this platform acted on. Publishing only one would make
+        the Anti-Corruption Layer's translation decision invisible to
+        whoever has to reconcile a disputed order.
+      parameters:
+        - name: networkRef
+          in: path
+          required: true
+          description: >
+            The network's own reference for the demand (for Vendor Direct
+            Fulfillment, its purchase-order number). Treated as an opaque
+            string: this context is Conformist upstream, so the network
+            owns the format and we never parse it.
+          schema:
+            type: string
+          example: po-4711
+      responses:
+        "200":
+          description: The network order.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NetworkOrder"
+        "404":
+          $ref: "#/components/responses/Problem"
+        "500":
+          $ref: "#/components/responses/Problem"
+
+components:
+  responses:
+    Problem:
+      description: An RFC 7807 problem document.
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+
+  schemas:
+    NetworkOrder:
+      type: object
+      required:
+        - networkRef
+        - siteId
+        - state
+        - requiredShipBy
+        - acknowledgeBy
+        - receivedAt
+        - acknowledgementOverdue
+        - lines
+      properties:
+        networkRef:
+          type: string
+          description: The network's reference for this demand.
+          example: po-4711
+        siteId:
+          type: string
+          description: The fulfillment site the demand is destined for.
+          example: site-1
+        state:
+          type: string
+          description: >
+            `NEW` is received and unanswered, with the clock running.
+            `ACKNOWLEDGED` is a commitment to fulfil in full — the
+            protocol has no partial acknowledgement. `REJECTED` is a
+            refusal, and just as valid an answer: a deadline we cannot
+            meet is better refused inside the window than missed after it.
+            `CONFIRMED` means shipment has been confirmed to the network.
+          enum: [NEW, ACKNOWLEDGED, REJECTED, CONFIRMED]
+        requiredShipBy:
+          type: string
+          format: date-time
+          description: >
+            The deadline the NETWORK set. This context did not choose it
+            and cannot move it.
+        acknowledgeBy:
+          type: string
+          format: date-time
+          description: >
+            When our answer is due — 24 hours after the demand ARRIVED,
+            matching the counterparty's published SLA. Anchored to arrival
+            and then stored, never recomputed: a batch that arrives after
+            an outage may already be near or past its window, and
+            recomputing would silently reset every one of those clocks.
+        receivedAt:
+          type: string
+          format: date-time
+          description: When we received the demand.
+        localOrderId:
+          type: string
+          description: >
+            The order raised in order-management for this demand. Absent
+            until acknowledged, because local work must never exist for
+            demand we have not committed to. An explicitly stored mapping,
+            never derived from a string convention.
+          example: ord-1a226bfd-c654-495f-af87-5883d67c5371
+        acknowledgementOverdue:
+          type: boolean
+          description: >
+            Whether the window has closed with this order still
+            unanswered. Derived using the same domain rule the sweep
+            enforces, so this surface cannot disagree with the sweep about
+            what overdue means.
+        lines:
+          type: array
+          items:
+            $ref: "#/components/schemas/NetworkOrderLine"
+
+    NetworkOrderLine:
+      type: object
+      required: [networkLineRef, networkProductId, sku, quantity]
+      properties:
+        networkLineRef:
+          type: string
+          description: >
+            The network's identity for this line, unique only WITHIN its
+            order rather than globally.
+          example: "1"
+        networkProductId:
+          type: string
+          description: >
+            The network's product identifier (an ASIN, in the
+            counterparty's vocabulary). Not a SKU.
+          example: ASIN-XYZ123
+        sku:
+          type: string
+          description: >
+            Our product identity, resolved from `networkProductId` by this
+            context's translation dictionary. Demand naming a product we
+            cannot translate is rejected in full, because we cannot
+            acknowledge in full what we cannot identify in full.
+          example: sku-1
+        quantity:
+          type: integer
+          minimum: 1
+          example: 3
+
+    InboundStatus:
+      type: object
+      required: [networkMode, polls, received, failed, unanswered, overdue]
+      properties:
+        networkMode:
+          type: string
+          description: >
+            The gateway mode actually in force, echoed so it can be
+            verified rather than assumed. `stub` reaches no external
+            network and needs no credentials.
+          enum: [stub, sandbox, live]
+        polls:
+          type: integer
+          description: Poll passes attempted since start.
+        received:
+          type: integer
+          description: Units of demand successfully processed since start.
+        failed:
+          type: integer
+          description: >
+            Units that failed and will be re-fetched. A failure
+            deliberately does not advance the watermark, so nothing is
+            skipped; processing is idempotent on `networkRef`, which is
+            what makes the retry safe.
+        since:
+          type: string
+          format: date-time
+          description: >
+            The watermark the next poll will use. ABSENT before any pass
+            has completed cleanly — which after real uptime is itself the
+            signal that no poll has ever succeeded.
+        unanswered:
+          type: integer
+          description: Orders currently in `NEW`.
+        overdue:
+          type: integer
+          description: >
+            Of those, how many have already missed their acknowledgement
+            window. Above zero is worth alerting on.
+
+    Problem:
+      type: object
+      description: RFC 7807 problem details.
+      required: [type, title, status]
+      properties:
+        type:
+          type: string
+          format: uri
+          example: https://errors.network-fulfillment.warehouse-systems.dev/network-order-not-found
+        title:
+          type: string
+          example: Network order not found
+        status:
+          type: integer
+          example: 404
+        detail:
+          type: string
+          example: network order not found
+        instance:
+          type: string
+          example: /network-orders/po-4711

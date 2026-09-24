@@ -1,0 +1,29 @@
+{{- if or .Values.productTranslation.mappings .Values.stubDemand.demands }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "network-fulfillment.fullname" . }}-data
+  labels:
+    {{- include "network-fulfillment.labels" . | nindent 4 }}
+data:
+{{- if .Values.productTranslation.mappings }}
+  products.json: |
+    {"products": [
+    {{- range $i, $m := .Values.productTranslation.mappings }}
+      {{ if $i }},{{ end }}{"networkProductId": {{ $m.networkProductId | quote }}, "sku": {{ $m.sku | quote }}}
+    {{- end }}
+    ]}
+{{- end }}
+{{- if .Values.stubDemand.demands }}
+  demand.json: |
+    {"demands": [
+    {{- range $i, $d := .Values.stubDemand.demands }}
+      {{ if $i }},{{ end }}{"networkRef": {{ $d.networkRef | quote }}, "siteId": {{ $d.siteId | quote }}, "requiredShipBy": {{ $d.requiredShipBy | quote }}, "lines": [
+      {{- range $j, $l := $d.lines }}
+        {{ if $j }},{{ end }}{"networkLineRef": {{ $l.networkLineRef | quote }}, "networkProductId": {{ $l.networkProductId | quote }}, "quantity": {{ $l.quantity }}}
+      {{- end }}
+      ]}
+    {{- end }}
+    ]}
+{{- end }}
+{{- end }}

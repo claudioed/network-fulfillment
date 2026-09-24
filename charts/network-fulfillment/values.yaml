@@ -80,6 +80,12 @@ autoscaling:
 config:
   port: "8080"
 
+  # How often the network is polled. Inbound is a poll and nothing else
+  # (ADR 0001 section 5), so this is the only thing that brings demand in.
+  # Far below the 24h acknowledgement window on purpose: a slow or stopped
+  # poller spends a deadline somebody else set.
+  pollInterval: "1m"
+
   # stub | sandbox | live.
   #
   # stub is the default ON PURPOSE. It makes no external calls and needs
@@ -117,6 +123,44 @@ credentials:
   clientId: ""
   clientSecret: ""
   refreshToken: ""
+
+# The Anti-Corruption Layer's dictionary: the network's product identifier
+# to our SKU, rendered into a ConfigMap and mounted as a file.
+#
+# EMPTY BY DEFAULT, AND THAT IS NOT HARMLESS. With no mappings every order
+# the network sends is rejected as untranslatable: the pod is healthy, the
+# poller works, and the answer is always no. The service logs a WARNING at
+# startup when this is empty, because the symptom on its own looks exactly
+# like a network asking only for products we do not stock.
+#
+# There is deliberately no default mapping. This is curated business data —
+# nobody can derive which of our SKUs an external identifier means, and a
+# plausible-looking fake would be worse than an empty dictionary.
+productTranslation:
+  mappings: []
+  # - networkProductId: ASIN-XYZ123
+  #   sku: sku-1
+
+# Declarative demand for a STUB run: the same pattern as this fleet's
+# PATH_CATALOGUE_FILE, and the reason this context needs no write endpoint.
+#
+# requiredShipBy accepts an RFC 3339 instant or a duration relative to now
+# ("+36h"). Prefer the relative form: a fixed instant goes stale and every
+# order becomes instantly infeasible, which reads like a promise bug rather
+# than an expired fixture.
+#
+# Ignored unless config.networkMode is "stub" — the binary REFUSES to boot
+# if a seed file is set against a real gateway, because seeded demand would
+# never be delivered and somebody would be waiting for it.
+stubDemand:
+  demands: []
+  # - networkRef: po-4711
+  #   siteId: site-1
+  #   requiredShipBy: "+36h"
+  #   lines:
+  #     - networkLineRef: "1"
+  #       networkProductId: ASIN-XYZ123
+  #       quantity: 3
 
 # Persistence. With BOTH left empty the binary runs on its in-memory
 # repository: that is the zero-configuration local run (ADR 0001 section 4),

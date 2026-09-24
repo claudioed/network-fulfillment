@@ -1,0 +1,9 @@
+{
+  "name": "network-fulfillment-api-lint-tooling",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Pinned devDependency for the api-lint CI job (Spectral) so `npm ci` is used instead of an unpinned global `npm install -g`.",
+  "devDependencies": {
+    "@stoplight/spectral-cli": "6.16.3"
+  }
+}
