@@ -196,6 +196,27 @@ otel:
 
 extraEnv: []
 
+# Gates liveness and readiness until the process is actually serving.
+#
+# Without it, BOOT WORK RACES THE LIVENESS PROBE and loses: this service
+# runs migrations before it starts listening, and in this cluster every
+# injected pod's first outbound dial is reset ~10s after start (Istio
+# native sidecars), so the first migration attempt fails and the retry
+# pushes first-listen past the liveness threshold. Observed live as
+# CrashLoopBackOff with exit code 143 — SIGTERM, the kubelet killing a pod
+# that was still booting, which reads like an app crash and is not one.
+#
+# 30 x 2s = 60s of grace, comfortably past the retry budget in
+# cmd/netfulfil/main.go, after which liveness takes over unchanged. A
+# genuinely broken database still fails the pod; it just is not mistaken
+# for a slow one.
+startupProbe:
+  httpGet:
+    path: /healthz
+    port: http
+  periodSeconds: 2
+  failureThreshold: 30
+
 livenessProbe:
   httpGet:
     path: /healthz

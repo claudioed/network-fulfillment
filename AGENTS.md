@@ -25,6 +25,16 @@ Persistence is opt-in by `DATABASE_URL`: unset means the in-memory repo
 REFUSAL to boot — never a silent fallback, because the fallback costs the
 acknowledgement deadlines this context owes the network.
 
+**Startup is RETRIED (~31s budget) and gated by a `startupProbe`.** Both
+are required by this cluster, not defensive padding: every injected pod's
+first outbound dial is reset ~10s after the app starts (Istio native
+sidecars, so `holdApplicationUntilProxyStarts` is a no-op), and this
+service runs migrations before it starts listening. Without the retry that
+reset is fatal; without the probe the kubelet SIGTERMs a pod that is still
+booting (exit 143, which reads like an app crash and is not one). Both
+were observed live as CrashLoopBackOff. The retry does not weaken
+fail-closed — after the budget it still refuses to boot.
+
 The inbound leg is WIRED: a poller (`internal/adapters/inbound/poller`)
 drives `ReceiveNetworkDemand` on an interval, and a read-only REST surface
 (`internal/adapters/inbound/http`, contract in `apis/openapi.yaml`)
