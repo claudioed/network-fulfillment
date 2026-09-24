@@ -25,37 +25,55 @@ Persistence is opt-in by `DATABASE_URL`: unset means the in-memory repo
 REFUSAL to boot — never a silent fallback, because the fallback costs the
 acknowledgement deadlines this context owes the network.
 
-There is still no `apis/` (no REST surface beyond `/healthz`), no `web/`,
-and no live network call anywhere. `ReceiveNetworkDemand` is reachable
-only from the gateway poll loop, which is `stub` in the cluster. Read
+The inbound leg is WIRED: a poller (`internal/adapters/inbound/poller`)
+drives `ReceiveNetworkDemand` on an interval, and a read-only REST surface
+(`internal/adapters/inbound/http`, contract in `apis/openapi.yaml`)
+exposes what we told the network plus whether the poller is alive.
+Previously `ReceiveNetworkDemand` was constructed and DISCARDED
+(`_ = receive`), so nothing deployed could create a NetworkOrder at all.
+
+**The REST surface is read-only on purpose.** Demand arrives by polling
+and by nothing else (ADR 0001 section 5), so an HTTP intake endpoint would
+be a second, fictional inbound path; the only thing it could honestly do
+is inject test demand, which `NETWORK_SEED_FILE` does declaratively
+instead. Do not add a write endpoint here without changing that record.
+
+Two curated files, both following the fleet's `PATH_CATALOGUE_FILE`
+precedent: `PRODUCT_TRANSLATION_FILE` (the ACL dictionary — **without it
+every order is rejected as untranslatable**, and the service logs a
+warning at startup saying so) and `NETWORK_SEED_FILE` (stub demand, which
+refuses to boot if set against a non-stub gateway).
+
+There is still no `web/` and no live network call anywhere. Read
 `docs/adr/0001-network-fulfillment-bounded-context.md` before writing any
 code here — the boundary is **Accepted (2026-09-23)** and is a companion
 to `order-management` ADR 0020. Neither is meaningful without the other.
 
-**CI is ACTIVE** (`.github/workflows/ci.yml`), with seven jobs: `lint`,
-`test`, `integration`, `mutation-fast`, `vuln`, `arch-test`, `helm-lint`.
+**CI is ACTIVE** (`.github/workflows/ci.yml`), with eight jobs: `lint`,
+`test`, `integration`, `api-lint`, `mutation-fast`, `vuln`, `arch-test`,
+`helm-lint`.
 These are exactly the jobs whose surfaces exist in this repo today.
 `integration` runs the Postgres adapter against a real Postgres started by
 testcontainers INSIDE the test — never a `DATABASE_URL` service container
 with a skip gate, which would report success while asserting nothing. The
-template's remaining jobs — `bdd`, `api-lint`, `docs-api-drift`, `web`,
+template's remaining jobs — `bdd`, `docs-api-drift`, `web`,
 `trivy-scan`, `docker-publish`, `release`, `drift` — were **dropped, not
 disabled**, because there is no `features/`, `apis/`, `charts/`, `web/`,
 `migrations/` or Dockerfile yet. Add each job back in the PR that creates
 its surface; a job that fails for want of a directory is noise, not
 signal.
 
-**Branch protection on `develop` must now require the seven active
+**Branch protection on `develop` must now require the eight active
 contexts** with `strict: true`:
 
 ```
-lint  test  integration  mutation-fast  vuln  arch-test  helm-lint
+lint  test  integration  api-lint  mutation-fast  vuln  arch-test  helm-lint
 ```
 
 The earlier deferral (protection live with `required_status_checks: null`,
 because requiring contexts that could never report would have made every
 PR permanently unmergeable) is now resolved: the contexts report, so they
-are required. Add the remaining ones (`bdd`, `api-lint`) as each surface lands.
+are required. Add `bdd` when a `features/` directory lands.
 
 `.gremlins.yaml` thresholds are MEASURED, not copied: `efficacy: 99`,
 `mutant-coverage: 92`, set strictly below a real `gremlins unleash

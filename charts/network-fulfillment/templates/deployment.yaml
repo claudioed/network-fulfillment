@@ -109,6 +109,12 @@ spec:
             {{- range .Values.extraEnv }}
             - {{ toYaml . | nindent 14 | trim }}
             {{- end }}
+          {{- if or .Values.productTranslation.mappings .Values.stubDemand.demands }}
+          volumeMounts:
+            - name: data
+              mountPath: /etc/network-fulfillment
+              readOnly: true
+          {{- end }}
           {{- with .Values.livenessProbe }}
           livenessProbe:
             {{- toYaml . | nindent 12 }}
@@ -119,6 +125,12 @@ spec:
           {{- end }}
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
+      {{- if or .Values.productTranslation.mappings .Values.stubDemand.demands }}
+      volumes:
+        - name: data
+          configMap:
+            name: {{ include "network-fulfillment.fullname" . }}-data
+      {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

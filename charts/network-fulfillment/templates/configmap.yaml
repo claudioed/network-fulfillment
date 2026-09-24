@@ -5,8 +5,7 @@ metadata:
   labels:
     {{- include "network-fulfillment.labels" . | nindent 4 }}
 data:
-  # This context's entire configuration surface is four variables (see
-  # cmd/netfulfil/main.go). It reads no database and no Kafka.
+  # This context's configuration surface (see cmd/netfulfil/main.go).
   PORT: {{ .Values.config.port | quote }}
 
   # NETWORK_MODE decides which external-network adapter is wired:
@@ -30,3 +29,29 @@ data:
   # the knob deciding how long the floor can be blocked by demand the
   # network never confirmed.
   SWEEP_INTERVAL: {{ .Values.config.sweepInterval | quote }}
+
+  # How often the network is polled for new demand. Inbound is a poll and
+  # nothing else (ADR 0001 section 5): the network offers no push, so this
+  # interval is the ONLY thing that brings demand into this context. It
+  # must stay far below the 24h acknowledgement window -- a poller that is
+  # down or slow spends someone else's deadline, and an outage here is an
+  # SLA breach rather than a delayed batch.
+  POLL_INTERVAL: {{ .Values.config.pollInterval | quote }}
+{{- if .Values.productTranslation.mappings }}
+
+  # The Anti-Corruption Layer's dictionary: the network's product
+  # identifier to our SKU. Without it EVERY order is rejected as
+  # untranslatable -- the service looks healthy, answers the network in the
+  # negative every time, and the cause is invisible because refusing
+  # unknown products is also correct behaviour. Mounted as a file because
+  # it is curated data, not configuration: nobody can derive this mapping.
+  PRODUCT_TRANSLATION_FILE: /etc/network-fulfillment/products.json
+{{- end }}
+{{- if .Values.stubDemand.demands }}
+
+  # Declarative demand for a stub run, the same shape as this fleet's
+  # PATH_CATALOGUE_FILE. This is how a credential-free deployment is given
+  # something to receive; the honest alternative to a write endpoint that
+  # exists only for testing and has no production counterpart.
+  NETWORK_SEED_FILE: /etc/network-fulfillment/demand.json
+{{- end }}

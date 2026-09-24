@@ -103,6 +103,30 @@ jobs:
       - name: Integration tests
         run: go test -tags=integration ./... -race -count=1
 
+  # ============================================================
+  # CLASSIFICATION: LINTERS & STATIC ANALYSIS (API CONTRACT)
+  # ============================================================
+  # The REST contract this context publishes. Read-only by design — demand
+  # arrives by polling the network, never by an inbound HTTP call — so this
+  # spec describes observation endpoints only, and the linter keeps the
+  # published document honest about that.
+  api-lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: "20"
+      - name: Install Spectral
+        # `npm ci` against a pinned local package-lock.json instead of an
+        # unpinned global `npm install -g`.
+        run: |
+          npm ci --prefix apis/tooling
+          echo "$PWD/apis/tooling/node_modules/.bin" >> "$GITHUB_PATH"
+      - name: Lint OpenAPI spec
+        run: spectral lint apis/openapi.yaml --ruleset .spectral.yaml --fail-severity=warn
+
   mutation-fast:
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -155,10 +179,14 @@ jobs:
           check-latest: true
       - name: helm lint
         run: helm lint charts/network-fulfillment
-      - name: Chart credential-wiring tests
+      - name: Chart wiring tests
+        # Both suites run on every PR, deliberately. process-path-management
+        # has a render-assertion script that is NOT wired to CI and only
+        # runs if somebody remembers — which is how it rots.
         run: |
           pip install pyyaml
           python3 charts/network-fulfillment/tests/test_credential_wiring.py
+          python3 charts/network-fulfillment/tests/test_data_files.py
 
   arch-test:
     runs-on: ubuntu-latest

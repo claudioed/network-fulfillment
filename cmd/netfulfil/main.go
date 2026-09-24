@@ -17,6 +17,8 @@ import (
 	"syscall"
 	"time"
 
+	inboundhttp "github.com/claudioed/network-fulfillment/internal/adapters/inbound/http"
+	"github.com/claudioed/network-fulfillment/internal/adapters/inbound/poller"
 	"github.com/claudioed/network-fulfillment/internal/adapters/outbound/memory"
 	"github.com/claudioed/network-fulfillment/internal/adapters/outbound/network"
 	"github.com/claudioed/network-fulfillment/internal/adapters/outbound/ordermanagement"
@@ -50,6 +52,39 @@ func main() {
 	}
 	logger.Info("network gateway wired", "mode", mode)
 
+	// Declarative stub seeding, the same shape as the fleet's
+	// PATH_CATALOGUE_FILE. This is how a stub deployment is given
+	// something to receive: the network offers no push (ADR 0001 section 5),
+	// so the alternative would be a write endpoint that exists only for
+	// testing and has no production counterpart.
+	if err := seedStubDemand(gateway, logger); err != nil {
+		logger.Error("cannot load stub demand", "err", err)
+		os.Exit(1)
+	}
+
+	translation := memory.NewProductTranslation()
+	// The Anti-Corruption Layer's dictionary. Without it the map is empty
+	// and EVERY order rejects as untranslatable — the inbound leg looks
+	// alive while answering the network in the negative every time, and
+	// the cause is invisible because refusing unknown products is also
+	// correct behaviour.
+	if path := os.Getenv("PRODUCT_TRANSLATION_FILE"); path != "" {
+		n, err := memory.LoadProductTranslationFile(translation, path)
+		if err != nil {
+			logger.Error("cannot load product translation", "err", err)
+			os.Exit(1)
+		}
+		logger.Info("product translation loaded", "file", path, "products", n)
+	} else {
+		// WARN, not INFO: a deployment with no dictionary is running, and
+		// will reject everything the network sends.
+		logger.Warn("no PRODUCT_TRANSLATION_FILE set; every network order will be rejected as untranslatable")
+	}
+
+	// Loaded before the database is opened, deliberately: every failure
+	// path above this line may os.Exit freely, whereas one below it would
+	// skip `defer closeOrders()` and leak the pool. The dictionary needs
+	// no database, so there is no reason for it to sit after one.
 	orders, closeOrders, err := wireOrders(context.Background(), logger)
 	if err != nil {
 		// Same reasoning as the gateway above: a deployment that asked
@@ -60,8 +95,6 @@ func main() {
 		os.Exit(1)
 	}
 	defer closeOrders()
-
-	translation := memory.NewProductTranslation()
 
 	omBase := os.Getenv("ORDER_MANAGEMENT_URL")
 	if omBase == "" {
@@ -83,17 +116,23 @@ func main() {
 		Events:  logPublisher{logger: logger},
 		Clock:   systemClock{},
 	}
-	_ = receive
+	// The inbound leg. Until now ReceiveNetworkDemand was constructed and
+	// DISCARDED (`_ = receive`), so nothing in a deployed environment
+	// could create a NetworkOrder at all.
+	inbound := poller.New(gateway, receive, systemClock{}, poller.Config{
+		Interval: pollInterval(),
+	}, logger)
 
-	mux := http.NewServeMux()
-	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(`{"status":"ok"}`))
-	})
+	api := &inboundhttp.Server{
+		Orders:      orders,
+		Poller:      inbound,
+		Clock:       systemClock{},
+		NetworkMode: string(mode),
+	}
 
 	srv := &http.Server{
 		Addr:              addr(),
-		Handler:           mux,
+		Handler:           api.Routes(),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
@@ -101,6 +140,7 @@ func main() {
 	defer stop()
 
 	go runSweep(ctx, sweep, logger)
+	go inbound.Run(ctx)
 
 	go func() {
 		logger.Info("listening", "addr", srv.Addr)
@@ -187,6 +227,41 @@ func migrationsPath() string {
 		return p
 	}
 	return "/app/migrations"
+}
+
+// seedStubDemand loads NETWORK_SEED_FILE into the stub gateway.
+//
+// Only meaningful in stub mode, and it type-asserts rather than taking a
+// *StubGateway so the composition root keeps depending on the port. A
+// seed file set against a real gateway is a configuration MISTAKE worth
+// failing on, not something to ignore: it means someone expected demand
+// to appear and it silently never would.
+func seedStubDemand(gateway ports.NetworkGateway, logger *slog.Logger) error {
+	path := os.Getenv("NETWORK_SEED_FILE")
+	if path == "" {
+		return nil
+	}
+	stub, ok := gateway.(*network.StubGateway)
+	if !ok {
+		return fmt.Errorf("NETWORK_SEED_FILE is set but the gateway is not the stub: seeded demand would never be delivered")
+	}
+	n, err := network.LoadSeedFile(stub, path, time.Now().UTC())
+	if err != nil {
+		return err
+	}
+	logger.Info("stub demand seeded", "file", path, "demands", n)
+	return nil
+}
+
+func pollInterval() time.Duration {
+	if v := os.Getenv("POLL_INTERVAL"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			return d
+		}
+	}
+	// Well under the 24h acknowledgement window, so a restart or a brief
+	// outage cannot eat a meaningful fraction of it.
+	return time.Minute
 }
 
 func sweepInterval() time.Duration {
