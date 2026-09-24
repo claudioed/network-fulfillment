@@ -221,7 +221,37 @@ def check_translation_only_needs_no_demand() -> None:
     print("PASS: mappings without stub demand render only products.json")
 
 
+def check_startup_probe_gates_boot_work() -> None:
+    """Boot work must not race the liveness probe.
+
+    This service runs migrations BEFORE it starts listening, and in this
+    cluster every injected pod's first outbound dial is reset ~10s after
+    start. Without a startupProbe the kubelet SIGTERMs a pod that is still
+    booting — observed live as CrashLoopBackOff with exit code 143, which
+    reads like an app crash and is not one.
+    """
+    docs = render(None)
+    c = container(docs)
+
+    probe = c.get("startupProbe")
+    assert probe, (
+        "no startupProbe: boot work (migrations, plus a retried first dial) "
+        "would race the liveness probe and lose"
+    )
+
+    grace = probe.get("periodSeconds", 10) * probe.get("failureThreshold", 3)
+    assert grace >= 45, (
+        f"startupProbe allows only {grace}s; it must outlast the ~31s "
+        f"database retry budget in cmd/netfulfil/main.go"
+    )
+    # Liveness must still exist — the startup probe defers it, never
+    # replaces it.
+    assert c.get("livenessProbe"), "startupProbe replaced livenessProbe instead of deferring it"
+    print(f"PASS: startupProbe gates boot for {grace}s, liveness still present")
+
+
 def main() -> int:
+    check_startup_probe_gates_boot_work()
     check_default_has_no_data_files()
     check_rendered_json_is_parseable()
     check_files_are_wired_where_the_binary_looks()

@@ -200,9 +200,23 @@ func wireOrders(ctx context.Context, logger *slog.Logger) (ports.NetworkOrderRep
 		return memory.NewNetworkOrderRepo(), func() {}, nil
 	}
 
-	if err := postgres.RunMigrations(databaseURL, migrationsPath()); err != nil {
-		return nil, nil, fmt.Errorf("run migrations: %w", err)
+	// Retried, because in this fleet EVERY injected pod's first outbound
+	// TCP dial is reset ~10s after the app starts (Istio native sidecars;
+	// `holdApplicationUntilProxyStarts` is a no-op for them). A single
+	// attempt turns that known, transient condition into CrashLoopBackOff:
+	// observed live — migrations failed with "read: connection reset by
+	// peer", the process exited, and the pod never got far enough to serve
+	// its own health probe.
+	//
+	// The retry is NOT a weakening of the fail-closed rule. After the
+	// budget is exhausted this still refuses to boot; it just stops
+	// treating a sidecar warm-up as a permanent failure.
+	if err := retry(ctx, logger, "run migrations", func() error {
+		return postgres.RunMigrations(databaseURL, migrationsPath())
+	}); err != nil {
+		return nil, nil, err
 	}
+
 	pool, err := postgres.NewPool(ctx, databaseURL)
 	if err != nil {
 		return nil, nil, fmt.Errorf("open pool: %w", err)
@@ -211,13 +225,57 @@ func wireOrders(ctx context.Context, logger *slog.Logger) (ports.NetworkOrderRep
 	// so without this the first real failure would surface inside a
 	// request rather than at boot — turning a misconfigured deployment
 	// into an intermittent 500 instead of a refusal to start.
-	if err := pool.Ping(ctx); err != nil {
+	if err := retry(ctx, logger, "ping database", func() error {
+		return pool.Ping(ctx)
+	}); err != nil {
 		pool.Close()
-		return nil, nil, fmt.Errorf("ping: %w", err)
+		return nil, nil, err
 	}
 
 	logger.Info("order repository wired", "backend", "postgres")
 	return postgres.NewNetworkOrderRepo(pool), pool.Close, nil
+}
+
+// bootRetries and bootRetryDelay bound the startup retry budget.
+//
+// ~31s total (1+2+4+8+16), comfortably past the ~10s first-dial reset and
+// still far inside the liveness probe's own tolerance, so a genuinely
+// unreachable database still fails the pod rather than hanging it.
+const (
+	bootRetries    = 5
+	bootRetryDelay = time.Second
+)
+
+// retry runs op with exponential backoff, returning the LAST error so a
+// permanent failure still reports its real cause rather than "timed out".
+func retry(ctx context.Context, logger *slog.Logger, what string, op func() error) error {
+	return retryWithDelay(ctx, logger, what, bootRetryDelay, op)
+}
+
+// retryWithDelay is retry with the base delay injected, so tests can
+// exercise the give-up path without sleeping out the real ~31s budget.
+func retryWithDelay(ctx context.Context, logger *slog.Logger, what string, base time.Duration, op func() error) error {
+	delay := base
+	var err error
+	for attempt := 1; attempt <= bootRetries; attempt++ {
+		if err = op(); err == nil {
+			if attempt > 1 {
+				logger.Info("succeeded after retry", "op", what, "attempt", attempt)
+			}
+			return nil
+		}
+		if attempt == bootRetries {
+			break
+		}
+		logger.Warn("retrying", "op", what, "attempt", attempt, "in", delay, "err", err)
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("%s: %w", what, ctx.Err())
+		case <-time.After(delay):
+		}
+		delay *= 2
+	}
+	return fmt.Errorf("%s (after %d attempts): %w", what, bootRetries, err)
 }
 
 // migrationsPath is where the migrations live in the container image (see
