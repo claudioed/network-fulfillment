@@ -4,12 +4,12 @@ harness-template: v1
 
 Supporting bounded context: the anti-corruption layer between the
 `warehouse-systems` fleet and an external retail fulfillment network
-(Amazon's Selling Partner API, Vendor Direct Fulfillment). **Conformist**
+(a major e-commerce retailer's Selling Partner API, Vendor Direct Fulfillment). **Conformist**
 to the network upstream, **Anti-Corruption Layer** for everything
 downstream of it in this fleet. Owns **NetworkOrder** and
 **CapabilityOffer** as first-class aggregates.
 
-Study project — not a production system, not affiliated with Amazon or any
+Study project — not a production system, not affiliated with any real-world
 company (see README.md banner).
 
 ## CURRENT STATE: persisted, deployed, stub-only
