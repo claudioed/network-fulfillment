@@ -59,32 +59,48 @@ There is still no `web/` and no live network call anywhere. Read
 code here — the boundary is **Accepted (2026-09-23)** and is a companion
 to `order-management` ADR 0020. Neither is meaningful without the other.
 
-**CI is ACTIVE** (`.github/workflows/ci.yml`), with eight jobs: `lint`,
+**CI is ACTIVE** (`.github/workflows/ci.yml`), with eleven jobs: `lint`,
 `test`, `integration`, `api-lint`, `mutation-fast`, `vuln`, `arch-test`,
 `helm-lint` (`helm lint` plus the chart wiring tests in
-`charts/network-fulfillment/tests/`).
-These are exactly the jobs whose surfaces exist in this repo today.
+`charts/network-fulfillment/tests/`), plus the packaging/release trio
+`trivy-scan`, `docker-publish`, `release` — added on parity with
+`order-management` once `main` existed to gate them on.
 `integration` runs the Postgres adapter against a real Postgres started by
 testcontainers INSIDE the test — never a `DATABASE_URL` service container
 with a skip gate, which would report success while asserting nothing. The
-template's remaining jobs were **dropped, not disabled**: `bdd` (no
-`features/`), `docs-api-drift` (no docs site), `web` (no `web/`), and
-`trivy-scan`/`docker-publish`/`release`/`drift`. The `Dockerfile` and chart
-now exist, but no image is published and there is no `main` branch yet.
-Add each job back in the PR that creates or first needs its surface. A
-job that fails because a directory is missing is noise, not signal.
+template's remaining jobs are still **dropped, not disabled**: `bdd` (no
+`features/`), `docs-api-drift` (no docs site), `web` (no `web/`), `drift`
+(no `warehouse-ui-kit` frontend dependency here). Add each back in the PR
+that creates or first needs its surface. A job that fails because a
+directory is missing is noise, not signal.
 
-**Branch protection on `develop` must now require the eight active
+`trivy-scan` builds the image (no push) and blocks on CRITICAL/HIGH with a
+known fix, but only for a PR targeting `main` — same fleet convention as
+`order-management` (validated pre-merge, not on every `develop` push).
+`docker-publish` pushes `ghcr.io/claudioed/network-fulfillment` on every
+push to `main`, cosign-signs the image keylessly (GitHub OIDC), and
+attests it with an SPDX SBOM. `release` runs after `docker-publish`
+succeeds: auto-bumps semver from the latest `vX.Y.Z` tag (starting
+`v0.1.0`), re-tags the image with that version, packages and pushes the
+Helm chart to `oci://ghcr.io/claudioed` as an OCI artifact, cuts the git
+tag, and creates a GitHub Release with the chart `.tgz` attached.
+
+**Branch protection on `develop` requires the eight non-packaging
 contexts** with `strict: true`:
 
 ```
 lint  test  integration  api-lint  mutation-fast  vuln  arch-test  helm-lint
 ```
 
-The earlier deferral (protection live with `required_status_checks: null`,
-because requiring contexts that could never report would have made every
-PR permanently unmergeable) is now resolved: the contexts report, so they
-are required. Add `bdd` when a `features/` directory lands.
+**Branch protection on `main` requires `lint`, `test`, `helm-lint`,
+`trivy-scan`** with `strict: true` and `enforce_admins: true` — same shape
+as `order-management`'s `main`. `docker-publish`/`release` are
+push-triggered, not PR checks, so they are deliberately not in the
+required-status-checks list. The earlier deferral on `develop` (protection
+live with `required_status_checks: null`, because requiring contexts that
+could never report would have made every PR permanently unmergeable) is
+resolved: the contexts report, so they are required. Add `bdd` when a
+`features/` directory lands.
 
 `.gremlins.yaml` thresholds are MEASURED, not copied: `efficacy: 99`,
 `mutant-coverage: 92`, set strictly below a real `gremlins unleash
