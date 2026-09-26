@@ -61,17 +61,18 @@ to `order-management` ADR 0020. Neither is meaningful without the other.
 
 **CI is ACTIVE** (`.github/workflows/ci.yml`), with eight jobs: `lint`,
 `test`, `integration`, `api-lint`, `mutation-fast`, `vuln`, `arch-test`,
-`helm-lint`.
+`helm-lint` (`helm lint` plus the chart wiring tests in
+`charts/network-fulfillment/tests/`).
 These are exactly the jobs whose surfaces exist in this repo today.
 `integration` runs the Postgres adapter against a real Postgres started by
 testcontainers INSIDE the test — never a `DATABASE_URL` service container
 with a skip gate, which would report success while asserting nothing. The
-template's remaining jobs — `bdd`, `docs-api-drift`, `web`,
-`trivy-scan`, `docker-publish`, `release`, `drift` — were **dropped, not
-disabled**, because there is no `features/`, `apis/`, `charts/`, `web/`,
-`migrations/` or Dockerfile yet. Add each job back in the PR that creates
-its surface; a job that fails for want of a directory is noise, not
-signal.
+template's remaining jobs were **dropped, not disabled**: `bdd` (no
+`features/`), `docs-api-drift` (no docs site), `web` (no `web/`), and
+`trivy-scan`/`docker-publish`/`release`/`drift`. The `Dockerfile` and chart
+now exist, but no image is published and there is no `main` branch yet.
+Add each job back in the PR that creates or first needs its surface. A
+job that fails because a directory is missing is noise, not signal.
 
 **Branch protection on `develop` must now require the eight active
 contexts** with `strict: true`:
@@ -91,9 +92,11 @@ are required. Add `bdd` when a `features/` directory lands.
 mutant coverage, 14 killed / 0 lived / 1 not covered). Re-measure and
 re-set them when the domain grows; never copy a sibling's numbers.
 
-`.claude/rules/*.md` are the template's structural skeletons with
-`<!-- fill in -->` markers. Fill them in for real once the domain exists;
-do not fabricate domain content into them ahead of the code.
+`.claude/rules/*.md` describe the code as it is: `domain-model.md`
+(NetworkOrder, use cases, ports), `rest-api.md` (the four read-only
+routes, RFC 7807), and `integration-events.md` (no Kafka yet; the rules
+for when it arrives). Keep them in sync with the code. Do not write planned
+concepts into them as if they exist.
 
 ## Why this context exists
 
@@ -126,38 +129,50 @@ advertisedQuantity = min(
 Everything else in this context is plumbing that makes that deliverable
 and honest.
 
-## Planned architecture (NON-NEGOTIABLE — identical shape to the fleet)
+## Architecture (NON-NEGOTIABLE — identical shape to the fleet)
 
-Hexagonal / Ports & Adapters, enforced by the `arch-go` fitness test in
-`internal/architecture/` (already present and passing trivially on the
-empty tree). Strict dependency rule: **domain depends on nothing;
-application depends on domain; adapters depend on application/domain.**
+Hexagonal / Ports & Adapters, enforced by the `arch-go` fitness tests in
+`internal/architecture/`. Strict dependency rule: **domain depends on
+nothing; application depends on domain; adapters depend on
+application/domain.**
 
 ```
+cmd/netfulfil/          composition root (the only binary)
 internal/
   domain/
     networkorder/       NetworkOrder aggregate, acknowledgement invariants
-    capabilityoffer/    CapabilityOffer, advertised-availability basis
-    shared/             NetworkRef, value objects, domain events
+    shared/             NetworkRef, NetworkLineRef, NetworkProductId, SKU,
+                        LocalOrderId, SiteId, validation errors
   application/
-    ports/              outbound interfaces (network gateway, OM client,
-                        inventory/schedule/capacity caches)
-    usecases/           IngestNetworkDemand, AcknowledgeNetworkOrder,
-                        RecomputeCapabilityOffer, ConfirmShipment
+    contract/           InboundDemand, HeldOrderRequest/Result
+    ports/              NetworkOrderRepo, NetworkGateway, FulfillmentPlanner,
+                        ProductTranslation, EventPublisher, Clock
+    usecases/           ReceiveNetworkDemand, SweepAcknowledgementDeadlines
   adapters/
-    inbound/            poller, HTTP, (later) MCP
-    outbound/spapi/     the ACL — the ONLY place network vocabulary exists
-    outbound/kafka/     fleet integration events
-    outbound/postgres/  persistence
+    inbound/http/       read-only REST (apis/openapi.yaml)
+    inbound/poller/     the inbound leg: polls the gateway, feeds Receive...
+    outbound/network/   NETWORK_MODE switch + stub gateway + seed file — the
+                        ONLY place network vocabulary may exist
+    outbound/ordermanagement/  held order, release, cancel (OM REST)
+    outbound/postgres/  NetworkOrderRepo + migrations runner
+    outbound/memory/    in-memory repo + product-translation file loader
+  architecture/         arch-go + fleet fitness tests
+migrations/             0001_init (network_orders, network_order_lines)
+charts/network-fulfillment/   Helm chart + Python wiring tests
 ```
 
-`MUTATION_FAST_PKG` is set to `./internal/domain/networkorder` — create
-that package or update the Makefile when the real richest aggregate is
-known.
+Still planned (ADR 0001), not in the tree: `CapabilityOffer` and its
+Kafka-fed caches, `outbound/kafka`, a credentialed `sandbox`/`live`
+gateway, shipment confirmation, transaction-status reconciliation, and an
+MCP adapter.
+
+`MUTATION_FAST_PKG` is `./internal/domain/networkorder`, the only aggregate.
 
 ## Hard rules for this context
 
-1. **The network's vocabulary stops at `adapters/outbound/spapi/`.**
+1. **The network's vocabulary stops at `adapters/outbound/network/`**
+   (today the stub gateway; the credentialed SP-API client will live
+   there too).
    `purchaseOrderNumber`, `itemSequenceNumber`, `buyerProductIdentifier`
    (ASIN), `acknowledgementStatus` codes, `sellingParty`/`shipFromParty`,
    `ShippingSpeedCategory` must never appear in `internal/domain` or in
@@ -198,10 +213,10 @@ known.
 
 ```bash
 make check          # fmt-check + vet + build + lint + test
-make check-all      # check + coverage (90% gate) + arch-test + bdd
-make arch-test      # arch-go hexagonal fitness tests  (passes today)
-make integration    # testcontainers — never a skip-gated KAFKA_BROKERS check
-make mutation-fast  # gremlins on MUTATION_FAST_PKG
+make check-all      # check + coverage (90% gate) + arch-test + bdd (no features/ yet)
+make arch-test      # arch-go hexagonal + fleet fitness tests
+make integration    # Postgres via testcontainers — never a skip-gated check
+make mutation       # gremlins on MUTATION_FAST_PKG (CI job: mutation-fast)
 make mutation-full  # measure real thresholds before editing .gremlins.yaml
 make vuln           # govulncheck ./...
 lefthook install    # pre-commit fmt/lint/vet, pre-push make check
@@ -211,6 +226,7 @@ lefthook install    # pre-commit fmt/lint/vet, pre-push make check
 
 GitFlow: `feature/*` branches off `develop`, PR into `develop`
 (`gh pr create --base develop`); `develop` promotes to `main` for release.
+This repo has never been released: there is no `main` branch yet.
 Do not merge your own PR — leave it open for independent review.
 
 ## Related decisions elsewhere in the fleet
@@ -224,6 +240,8 @@ Do not merge your own PR — leave it open for independent review.
 | `process-path-management` | 0010 | The fulfillment capability contract this context advertises against |
 | `fulfillment-execution` | 0025 | The sweep pattern the acknowledgement-deadline sweep mirrors |
 
-Note: `warehouse-infra`'s `local.services` does **not** auto-discover
-repos. This context needs an explicit entry there or it will never deploy,
-no matter how complete its chart is.
+Note: `warehouse-infra` does **not** auto-discover repos. This context is
+deployed by its own `terraform/network-fulfillment.tf`, not through
+`local.services`. It gets its own database Secret (`network-fulfillment-db`)
+and a Kong route at `/api/network-fulfillment`. That file leaves
+`config.networkMode` at the chart's `stub` default on purpose.
