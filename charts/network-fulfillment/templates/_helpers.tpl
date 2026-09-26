@@ -56,3 +56,23 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- include "network-fulfillment.fullname" . }}-database
 {{- end }}
 {{- end }}
+
+{{- define "network-fulfillment.analyticsSecretName" -}}
+{{- if .Values.analytics.database.existingSecret }}
+{{- .Values.analytics.database.existingSecret }}
+{{- else }}
+{{- include "network-fulfillment.fullname" . }}-analytics
+{{- end }}
+{{- end }}
+
+{{- define "network-fulfillment.mcpFullname" -}}
+{{- include "network-fulfillment.fullname" . }}-mcp
+{{- end }}
+
+{{- define "network-fulfillment.projectorFullname" -}}
+{{- include "network-fulfillment.fullname" . }}-projector
+{{- end }}
+
+{{- define "network-fulfillment.reportsFullname" -}}
+{{- include "network-fulfillment.fullname" . }}-reports
+{{- end }}
