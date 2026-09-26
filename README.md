@@ -5,8 +5,8 @@
 > follows real industry-standard patterns and terminology (WMS/WES/WCS,
 > CloudEvents-like envelopes, RFC 7807, hexagonal architecture) but is
 > **not a production system** and is **not affiliated with, endorsed by, or
-> representative of Amazon, Manhattan Associates, Blue Yonder, or any other
-> company**. References to the Amazon Selling Partner API describe a public
+> representative of any real-world
+> company**. References to a major e-commerce retailer's Selling Partner API describe a public
 > API this exercise integrates against as a learning target.
 
 The anti-corruption layer between the `warehouse-systems` fleet and an
