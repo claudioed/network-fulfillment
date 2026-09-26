@@ -32,7 +32,7 @@ FROM alpine:3.24@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec4
 # TLS (NETWORK_MODE=live), and without a trust store that fails at runtime,
 # not at build time.
 RUN apk upgrade --no-cache && \
-    apk add --no-cache ca-certificates=20260611-r0 && \
+    apk add --no-cache ca-certificates=20260909-r0 && \
     addgroup -g 1000 -S app && adduser -u 1000 -S app -G app
 WORKDIR /app
 COPY --from=build --chown=app:app /out/netfulfil ./netfulfil
